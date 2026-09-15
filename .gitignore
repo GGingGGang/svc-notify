@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# virtual envs
+.venv/
+venv/
+
+# env
+.env
+.env.*
+
+# private docs
+PLAN.md
+CLAUDE.md
