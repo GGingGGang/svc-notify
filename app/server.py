@@ -27,9 +27,9 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/readyz":
             if self.server.metrics.ready:
-                self._json(HTTPStatus.OK, {"status": "ready"})
+                self._json(HTTPStatus.OK, {"status": "ready", "delivery": "disabled"})
             else:
-                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"status": "not_ready"})
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"status": "not_ready", "delivery": "disabled"})
             return
         if self.path == "/metrics":
             self._text(
@@ -62,4 +62,3 @@ class RequestHandler(BaseHTTPRequestHandler):
 
 def build_server(settings: Settings, metrics: Metrics) -> AppServer:
     return AppServer(settings, metrics)
-

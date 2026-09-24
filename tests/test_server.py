@@ -32,7 +32,7 @@ class ServerTest(unittest.TestCase):
 
         with urlopen(f"{self.base_url}/readyz", timeout=5) as response:
             self.assertEqual(response.status, 200)
-            self.assertEqual(json.loads(response.read()), {"status": "ready"})
+            self.assertEqual(json.loads(response.read()), {"status": "ready", "delivery": "disabled"})
 
     def test_metrics(self) -> None:
         self.metrics.mark_ready(True)
@@ -43,6 +43,8 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertIn("text/plain", response.headers["Content-Type"])
         self.assertIn('app_ready{service="svc-notify"} 1', body)
+        self.assertIn('notification_delivery_enabled{service="svc-notify"} 0', body)
+        self.assertNotIn("reminders_sent_total", body)
         self.assertIn("app_uptime_seconds", body)
 
     def test_metrics_escapes_service_label(self) -> None:

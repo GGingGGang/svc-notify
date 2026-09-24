@@ -28,6 +28,9 @@ class Metrics:
             "# HELP app_ready Readiness state of the HTTP service.",
             "# TYPE app_ready gauge",
             f"app_ready{{{labels}}} {ready}",
+            "# HELP notification_delivery_enabled Whether actual notification delivery is configured.",
+            "# TYPE notification_delivery_enabled gauge",
+            f"notification_delivery_enabled{{{labels}}} 0",
             "",
         ]
         return "\n".join(lines)
