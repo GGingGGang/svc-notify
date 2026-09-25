@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 import signal
+import sys
 import threading
+from datetime import datetime, timezone
 
 from app.config import Settings
 from app.config import load_settings
@@ -10,8 +13,19 @@ from app.metrics import Metrics
 from app.server import build_server
 
 
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return json.dumps({
+            "ts": datetime.fromtimestamp(record.created, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            "level": record.levelname,
+            "msg": record.getMessage(),
+            "service": "notify",
+        })
+
+
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(sys.stdout)])
+    logging.getLogger().handlers[0].setFormatter(JsonFormatter())
     settings = load_settings()
     shutdown_requested = threading.Event()
 
