@@ -4,6 +4,9 @@ import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from opentelemetry import propagate, trace
+from opentelemetry.trace import SpanKind, Status, StatusCode
+
 from app.config import Settings
 from app.metrics import Metrics
 
@@ -22,6 +25,24 @@ class RequestHandler(BaseHTTPRequestHandler):
     server: AppServer
 
     def do_GET(self) -> None:
+        route = self.path if self.path in {"/healthz", "/readyz", "/metrics"} else "/{unmatched}"
+        context = propagate.extract({"traceparent": self.headers.get("traceparent", ""), "baggage": self.headers.get("baggage", "")})
+        tracer = trace.get_tracer("svc-notify")
+        with tracer.start_as_current_span(
+            f"GET {route}", context=context, kind=SpanKind.SERVER,
+            attributes={"http.request.method": "GET", "http.route": route},
+        ) as span:
+            try:
+                self._handle_get()
+                status = getattr(self, "response_status", HTTPStatus.NOT_FOUND)
+                span.set_attribute("http.response.status_code", int(status))
+                if status >= HTTPStatus.INTERNAL_SERVER_ERROR:
+                    span.set_status(Status(StatusCode.ERROR))
+            except Exception:
+                span.set_status(Status(StatusCode.ERROR))
+                raise
+
+    def _handle_get(self) -> None:
         if self.path == "/healthz":
             self._json(HTTPStatus.OK, {"status": "ok"})
             return
@@ -46,6 +67,7 @@ class RequestHandler(BaseHTTPRequestHandler):
     def _json(self, status: HTTPStatus, body: dict[str, str]) -> None:
         payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
+        self.response_status = status
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
@@ -54,6 +76,7 @@ class RequestHandler(BaseHTTPRequestHandler):
     def _text(self, status: HTTPStatus, body: str, content_type: str) -> None:
         payload = body.encode("utf-8")
         self.send_response(status)
+        self.response_status = status
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()

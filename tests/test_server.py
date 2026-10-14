@@ -1,7 +1,8 @@
 import json
 import threading
 import unittest
-from urllib.request import urlopen
+from unittest.mock import patch
+from urllib.request import Request, urlopen
 
 from app.config import Settings
 from app.metrics import Metrics
@@ -26,6 +27,22 @@ class ServerTest(unittest.TestCase):
         with urlopen(f"{self.base_url}/healthz", timeout=5) as response:
             self.assertEqual(response.status, 200)
             self.assertEqual(json.loads(response.read()), {"status": "ok"})
+
+    def test_healthz_continues_incoming_trace_context(self) -> None:
+        with patch("app.server.trace.get_tracer") as get_tracer, patch(
+            "app.server.propagate.extract", wraps=__import__("opentelemetry").propagate.extract
+        ) as extract:
+            request = Request(f"{self.base_url}/healthz", headers={
+                "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+            })
+            with urlopen(request, timeout=5) as response:
+                self.assertEqual(response.status, 200)
+
+        get_tracer.return_value.start_as_current_span.assert_called_once()
+        kwargs = get_tracer.return_value.start_as_current_span.call_args.kwargs
+        self.assertEqual(kwargs["name"], "GET /healthz")
+        self.assertEqual(kwargs["attributes"]["http.route"], "/healthz")
+        self.assertEqual(extract.call_args.args[0]["traceparent"], "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
 
     def test_readyz(self) -> None:
         self.metrics.mark_ready(True)

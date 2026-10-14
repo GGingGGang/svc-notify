@@ -11,6 +11,7 @@ from app.config import Settings
 from app.config import load_settings
 from app.metrics import Metrics
 from app.server import build_server
+from app.tracing import configure_tracing, shutdown_tracing
 
 
 class JsonFormatter(logging.Formatter):
@@ -40,6 +41,7 @@ def main() -> None:
 
 
 def run_service(settings: Settings, shutdown_requested: threading.Event) -> None:
+    tracer_provider = configure_tracing(settings.service_name, settings.app_version)
     metrics = Metrics()
     server = build_server(settings, metrics)
     server_thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.5}, name="http-server")
@@ -54,6 +56,7 @@ def run_service(settings: Settings, shutdown_requested: threading.Event) -> None
         server.shutdown()
         server_thread.join(timeout=15)
         server.server_close()
+        shutdown_tracing(tracer_provider)
 
 
 if __name__ == "__main__":
