@@ -2,6 +2,8 @@
 
 ## 변경 사항
 
+- 후속 CI 확인에서 공통 Python 테스트 단계의 의존성 설치 누락을 발견했다. `jenkins-shared-library/resources/ci/services.yaml`에서 `pip install .` 후 테스트하도록 수정했다. 패키지 빌드 산출물은 `.gitignore`에 추가했다.
+
 - OpenTelemetry baggage와 trace context propagator를 설치된 패키지의 경로로 가져와 exporter 설정과 관계없이 서비스 모듈이 import되도록 수정했다.
 - trace 테스트가 실제 span 이름 전달 방식(위치 인자)을 확인하도록 고쳤다.
 - tracing 비활성 상태, OTLP 활성 초기화·정상 종료, exporter 초기화 실패, provider 종료 실패를 확인하는 테스트를 추가했다.
