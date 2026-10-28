@@ -40,7 +40,7 @@ class ServerTest(unittest.TestCase):
 
         get_tracer.return_value.start_as_current_span.assert_called_once()
         kwargs = get_tracer.return_value.start_as_current_span.call_args.kwargs
-        self.assertEqual(kwargs["name"], "GET /healthz")
+        self.assertEqual(get_tracer.return_value.start_as_current_span.call_args.args[0], "GET /healthz")
         self.assertEqual(kwargs["attributes"]["http.route"], "/healthz")
         self.assertEqual(extract.call_args.args[0]["traceparent"], "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
 
