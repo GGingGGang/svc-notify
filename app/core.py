@@ -17,14 +17,15 @@ class CoreClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    def reminder_validity(self, event: dict[str, Any]) -> dict[str, Any]:
+    def reminder_validity(self, event: dict[str, Any], revision: int | None = None) -> dict[str, Any]:
         if not self.settings.internal_service_token:
             raise CoreUnavailable("core_unavailable")
         query = urllib.parse.urlencode({
             "user_id": event["user_id"],
-            "revision": event["schedule_revision"],
+            "revision": event["schedule_revision"] if revision is None else revision,
             "minutes_before": event["minutes_before"],
             "channel": event["channel"],
+            "remind_at": event["remind_at"],
         })
         schedule_id = urllib.parse.quote(str(event["schedule_id"]), safe="")
         url = f"{self.settings.core_url.rstrip('/')}/internal/reminders/{schedule_id}/validity?{query}"
@@ -39,7 +40,7 @@ class CoreClient:
                     raise CoreUnavailable("core_unavailable")
                 return body
         except urllib.error.HTTPError as exc:
-            if exc.code in {401, 403, 404}:
+            if exc.code == 404:
                 return {"valid": False}
             raise CoreUnavailable("core_unavailable") from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:

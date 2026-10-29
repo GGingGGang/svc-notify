@@ -11,7 +11,9 @@ from app.config import Settings
 
 
 class AuthenticationError(Exception):
-    pass
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 class AuthClient:
@@ -48,7 +50,12 @@ class AuthClient:
         if not self.settings.internal_service_token:
             raise AuthenticationError("auth_unavailable")
         url = f"{self.settings.auth_account_status_url.rstrip('/')}/{user_id}/status"
-        return self._get(url, self.settings.internal_service_token)
+        try:
+            return self._get(url, self.settings.internal_service_token)
+        except AuthenticationError as exc:
+            if exc.code == "unauthorized":
+                raise AuthenticationError("auth_unavailable") from exc
+            raise
 
     def account(self, user_id: str) -> dict[str, Any]:
         status = self.account_status(user_id)

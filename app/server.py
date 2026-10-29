@@ -227,7 +227,7 @@ def _allowed_origins(settings: Settings) -> set[str]:
 
 def _database_ready(service: NotifyService) -> bool:
     try:
-        return bool(service.store and service.store.available and service.store.ping())
+        return bool(service.store and service.store.available and service.store.schema_ready and service.store.ping())
     except Exception:
         return False
 

@@ -244,6 +244,21 @@ class Store:
             cursor.execute("SELECT id,status FROM notification_history WHERE dispatch_id=%s FOR UPDATE", (dispatch_id,))
             existing = cursor.fetchone()
             if existing is not None:
+                if existing["status"] == "processing":
+                    cursor.execute(
+                        "SELECT processing_started_at < UTC_TIMESTAMP(3)-INTERVAL 30 SECOND AS stale "
+                        "FROM notification_history WHERE dispatch_id=%s",
+                        (dispatch_id,),
+                    )
+                    stale = cursor.fetchone()["stale"]
+                    if stale:
+                        cursor.execute(
+                            "UPDATE notification_history SET status='unknown',reason_code='worker_interrupted',"
+                            "processing_started_at=NULL,updated_at=UTC_TIMESTAMP(3) WHERE dispatch_id=%s",
+                            (dispatch_id,),
+                        )
+                        conn.commit()
+                        return "unknown", existing["id"], None
                 conn.commit()
                 return ("processing" if existing["status"] == "processing" else existing["status"], existing["id"], None)
             cursor.execute("SELECT destination_ciphertext FROM notify_channels WHERE id=%s", (channel_id,))

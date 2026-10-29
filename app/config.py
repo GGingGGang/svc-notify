@@ -19,6 +19,7 @@ class Settings:
     auth_account_status_url: str = "http://auth.auth.svc.cluster.local:3000/internal/accounts"
     jwt_issuer: str = ""
     core_url: str = "http://core.core.svc.cluster.local:8080"
+    batch_url: str = "http://batch.batch.svc.cluster.local:8080"
     internal_service_token: str = ""
     nats_url: str = ""
     telegram_bot_token: str = ""
@@ -51,6 +52,7 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         auth_account_status_url=source.get("AUTH_ACCOUNT_STATUS_URL", "http://auth.auth.svc.cluster.local:3000/internal/accounts"),
         jwt_issuer=source.get("JWT_ISSUER", ""),
         core_url=source.get("CORE_URL", "http://core.core.svc.cluster.local:8080"),
+        batch_url=source.get("BATCH_INTERNAL_BASE_URL", "http://batch.batch.svc.cluster.local:8080"),
         internal_service_token=source.get("INTERNAL_SERVICE_TOKEN", ""),
         nats_url=source.get("NATS_URL", ""),
         telegram_bot_token=source.get("TELEGRAM_BOT_TOKEN", ""),

@@ -11,6 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.auth import AuthClient, AuthenticationError
+from app.batch import BatchClient, BatchUnavailable
 from app.config import Settings
 from app.core import CoreClient, CoreUnavailable
 from app.store import Store
@@ -26,11 +27,13 @@ class ServiceError(Exception):
 
 class NotifyService:
     def __init__(self, settings: Settings, store: Store | None = None, auth: AuthClient | None = None,
-                 core: CoreClient | None = None, telegram: TelegramAdapter | None = None) -> None:
+                 core: CoreClient | None = None, telegram: TelegramAdapter | None = None,
+                 batch: BatchClient | None = None) -> None:
         self.settings = settings
         self.store = store
         self.auth = auth or AuthClient(settings)
         self.core = core or CoreClient(settings)
+        self.batch = batch or BatchClient(settings)
         self.telegram = telegram or TelegramAdapter(
             settings.telegram_bot_token, settings.telegram_bot_username, settings.telegram_webhook_secret,
         )
@@ -117,7 +120,7 @@ class NotifyService:
         now = datetime.now(timezone.utc)
         try:
             from_at = _query_date(query, "from", now - timedelta(days=30))
-            to_at = _query_date(query, "to", now + timedelta(milliseconds=1))
+            to_at = _query_date(query, "to", now)
         except ValueError as exc:
             raise ServiceError(400, "invalid_date_range") from exc
         if from_at >= to_at or to_at - from_at > timedelta(days=30) or to_at > now + timedelta(minutes=1):
@@ -127,6 +130,7 @@ class NotifyService:
     def request_test(self, user_id: str, channel_id: str, idempotency_key: str) -> dict[str, Any]:
         if not self.telegram_available:
             raise ServiceError(503, "channel_unavailable")
+        account = self._account(user_id)
         if not idempotency_key or len(idempotency_key) > 128:
             raise ServiceError(400, "idempotency_key_required")
         dispatch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"notify-test:{user_id}:{idempotency_key}"))
@@ -140,6 +144,19 @@ class NotifyService:
             raise ServiceError(404, "channel_not_found") from exc
         if state != "claimed":
             return {"notification_id": history_id, "status": "unknown" if state == "processing" else state}
+        quiet = self._store().preferences_quiet(user_id)
+        if quiet:
+            try:
+                timezone_name = account.get("timezone")
+                if not isinstance(timezone_name, str):
+                    raise ZoneInfoNotFoundError("missing timezone")
+                local_now = datetime.now(timezone.utc).astimezone(ZoneInfo(timezone_name)).strftime("%H:%M")
+            except (ZoneInfoNotFoundError, ValueError):
+                self._store().finish_test(dispatch_id, "failed", "timezone_unavailable", None)
+                raise ServiceError(503, "timezone_unavailable")
+            if _in_quiet_hours(local_now, quiet[0], quiet[1]):
+                self._store().finish_test(dispatch_id, "skipped", "do_not_disturb", None)
+                return {"notification_id": history_id, "status": "skipped", "reason_code": "do_not_disturb"}
         result = self.telegram.send_test(chat_id)
         status = _history_status(result.status)
         self._store().finish_test(dispatch_id, status, result.reason_code, result.receipt_id)
@@ -154,8 +171,11 @@ class NotifyService:
             return False
         text = message.get("text")
         chat = message.get("chat")
+        sender = message.get("from")
         update_id = body.get("update_id")
-        if not isinstance(text, str) or not isinstance(chat, dict) or not isinstance(update_id, int):
+        if not isinstance(text, str) or not isinstance(chat, dict) or not isinstance(sender, dict) or not isinstance(update_id, int):
+            return False
+        if chat.get("type") != "private" or sender.get("id") != chat.get("id"):
             return False
         match = re.fullmatch(r"/start(?:@[A-Za-z0-9_]+)?\s+([A-Za-z0-9_-]{20,80})", text.strip())
         if not match or not isinstance(chat.get("id"), (str, int)):
@@ -169,6 +189,8 @@ class NotifyService:
         except ValueError:
             return _event_result(event, "permanent_failure", "invalid_event")
         scheduled_at = _parse_date(event["remind_at"])
+        if self.metrics is not None:
+            self.metrics.record_dispatch_lag((datetime.now(timezone.utc) - scheduled_at).total_seconds())
         if self.storage_available and self.store.is_deleted_user(event["user_id"]):
             return _event_result(event, "cancelled", "account_deleted")
         if int(event["attempt"]) > 3:
@@ -194,11 +216,15 @@ class NotifyService:
             account = self._account(event["user_id"])
             if account.get("active") is not True:
                 return self._persist_result(event, channel_id, scheduled_at, "cancelled", "account_inactive")
-            validity = self.core.reminder_validity(event)
+            batch_snapshot = self.batch.reminder_validity(event)
+            if batch_snapshot.get("valid") is not True:
+                return self._persist_result(event, channel_id, scheduled_at, "cancelled", "stale_dispatch")
+            validity = self.core.reminder_validity(event, revision=batch_snapshot["revision"])
             if validity.get("valid") is not True:
                 return self._persist_result(event, channel_id, scheduled_at, "cancelled", "stale_schedule")
-        except (AuthenticationError, CoreUnavailable) as exc:
-            code = exc.code if isinstance(exc, AuthenticationError) else "core_unavailable"
+        except (AuthenticationError, CoreUnavailable, BatchUnavailable) as exc:
+            code = exc.code if isinstance(exc, AuthenticationError) else (
+                "batch_unavailable" if isinstance(exc, BatchUnavailable) else "core_unavailable")
             if code == "account_inactive":
                 return self._persist_result(event, channel_id, scheduled_at, "cancelled", code)
             return self._persist_result(event, channel_id, scheduled_at, "retryable_failure", code)
@@ -219,7 +245,19 @@ class NotifyService:
                 return self._persist_result(event, channel_id, scheduled_at, "retryable_failure", "timezone_unavailable")
             if _in_quiet_hours(local_now, quiet[0], quiet[1]):
                 return self._persist_result(event, channel_id, scheduled_at, "skipped", "do_not_disturb")
-        result = self.telegram.send_reminder(channel["chat_id"], event, validity, self.settings.public_app_url)
+        try:
+            latest_batch = self.batch.reminder_validity(event)
+        except BatchUnavailable:
+            return self._persist_result(event, channel_id, scheduled_at, "retryable_failure", "batch_unavailable")
+        if latest_batch.get("valid") is not True:
+            return self._persist_result(event, channel_id, scheduled_at, "cancelled", "stale_dispatch")
+        if not _same_schedule_generation(batch_snapshot, latest_batch):
+            return self._persist_result(event, channel_id, scheduled_at, "retryable_failure", "dispatch_changed")
+        validity = {**validity, "title": validity.get("title") or latest_batch["title"]}
+        latest_channel = store.active_channel(event["user_id"])
+        if latest_channel is None or latest_channel["id"] != channel_id:
+            return self._persist_result(event, channel_id, scheduled_at, "skipped", "consent_revoked")
+        result = self.telegram.send_reminder(latest_channel["chat_id"], event, validity, self.settings.public_app_url)
         return self._persist_result(event, channel_id, scheduled_at, result.status, result.reason_code, result.receipt_id)
 
     def _persist_result(self, event: dict, channel_id: str | None, scheduled_at: datetime, status: str,
@@ -278,6 +316,16 @@ def _parse_date(value: Any) -> datetime:
 def _query_date(query: dict[str, list[str]], key: str, default: datetime) -> datetime:
     value = query.get(key, [None])[0]
     return _parse_date(value) if value is not None else default
+
+
+def _same_schedule_generation(first: dict[str, Any], second: dict[str, Any]) -> bool:
+    if any(first.get(key) != second.get(key) for key in ("user_id", "schedule_id", "minutes_before", "channel")):
+        return False
+    try:
+        return (_parse_date(first["start_at"]) == _parse_date(second["start_at"])
+                and _parse_date(first["remind_at"]) == _parse_date(second["remind_at"]))
+    except (KeyError, ValueError, TypeError):
+        return False
 
 
 def _in_quiet_hours(now: str, start: str, end: str) -> bool:

@@ -81,6 +81,7 @@ class ServerTest(unittest.TestCase):
         self.assertIn('app_ready{service="svc-notify"} 1', body)
         self.assertIn('notification_delivery_enabled{service="svc-notify"} 0', body)
         self.assertIn('notification_attempts_total{service="svc-notify",outcome="accepted"} 0', body)
+        self.assertIn('notification_dispatch_lag_seconds{service="svc-notify"} 0.000', body)
         self.assertNotIn("reminders_sent_total", body)
         self.assertIn("app_uptime_seconds", body)
 

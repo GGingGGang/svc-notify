@@ -1,24 +1,27 @@
-# 구현 기록
+﻿# 구현 기록
 
-## 구현 범위
+## 기능 및 요구사항 근거
 
-- NTF-001~011 / REM-003: Telegram 채널 연결은 일회성 `/start` 챌린지를 실제 Telegram webhook update로 증명한다. 채널 동의, 연결 해제, 조용한 시간대, 30일 발송 이력, 분당 테스트 알림 제한을 구현했다. `push`/`email` 이벤트는 Telegram으로 바꾸지 않고 `skipped/channel_unsupported`로 끝낸다.
-- Telegram 목적지는 AES-GCM 암호문으로 저장한다. 삭제 tombstone은 암호화 키 회전에 영향을 받지 않는 UUID SHA-256 지문이다. 사용자 잠금 행으로 채널/설정/dispatch 쓰기와 계정 삭제를 직렬화하고, 삭제 이후 지연 due는 `cancelled/account_deleted`로 ACK할 수 있으며 개인 데이터 이력을 만들지 않는다.
-- durable NATS 소비자는 reminder 결과를 저장한 뒤 result subject에 발행하고 ACK한다. 같은 dispatch attempt는 기존 상태를 재사용하며, 처리 중 worker가 30초 넘게 중단된 상태는 `unknown`으로 저장해 재전송하지 않는다. 결과에는 제한된 reason code만 포함한다.
-- core 최신 validity 및 auth 계정 활성 상태를 호출해 발송 직전 검사한다. 내부 채널 확인 API `GET /internal/users/{user_id}/channels`는 `INTERNAL_SERVICE_TOKEN` bearer로 보호하고 검증·동의된 채널만 목적지 없이 반환한다.
-- Docker 빌드에서 마이그레이션 파일을 패키지 내 `app/migrations` 경로로 읽는다. MySQL TLS 검증은 기본 필수이며, TLS 해제는 `APP_ENV=test`에서만 허용한다. 설정이 비어 있으면 delivery가 비활성화되지만 liveness는 유지되고 readiness는 DB/NATS를 실제 검사한다.
-- `OPS001`: `notification_attempts_total{outcome}`는 첫 durable attempt completion에만 증가한다(outcome: accepted, retryable_failure, permanent_failure, unknown, skipped, cancelled). result 재발행은 이 카운터에 포함하지 않는다. 카운터는 프로세스 내 Prometheus 값이므로 재시작/DB commit 직후 crash의 경계에서 exactly-once 누적을 보장하지 않으며, 감사 가능한 원본은 MySQL attempt ledger다. 개인정보가 될 수 있는 ID/주소는 label에 사용하지 않는다.
+- NTF-001: Telegram `/start` one-time challenge로 수신 소유를 증명하고 목적지 직접 입력을 허용하지 않는다. webhook은 private chat 및 `from.id == chat.id`만 처리한다. `test_telegram_start_webhook_rejects_group_and_non_owner`, `test_channel_ownership_and_telegram_challenge_are_one_time`.
+- NTF-002/010: 미확인·미동의 채널과 취소된 동의는 보내지 않는다. 조용한 시간은 auth의 시간대를 사용하고 자정 넘는 구간을 처리한다. `test_unverified_or_unconsented_channel_is_skipped`, `test_consent_revoked_before_provider_call_is_not_sent`, `test_reminder_during_dnd_is_durable_skip`, `test_explicit_test_notification_respects_dnd`.
+- NTF-003/004/005/006/007: 일정 제목/현지 시작시간/시간대/열기 경로만 전송한다. 성공 상태는 provider receipt가 있을 때만 기록한다. 응답 유실은 `unknown`으로 종결해 재전송하지 않고, 429는 retryable, 4xx는 permanent로 분리한다. `test_reminder_has_only_minimal_schedule_content`, `test_provider_acceptance_requires_receipt`, `test_lost_provider_response_is_unknown_and_not_retryable`, `test_provider_errors_are_classified_without_raw_error_text`.
+- NTF-008: 이력 쿼리는 30일 범위를 제한하며 기본 날짜 범위도 정확히 30일이다. `test_history_default_range_is_valid_30_days`; 실제 날짜 기반 조회/retention은 MySQL 환경에서 함께 수행한다.
+- NTF-009: 테스트 알림은 명시 요청 및 idempotency key를 요구하고, per-user/channel 60초 DB 제한을 둔다. stale processing 30초 후 결과를 unknown으로 고정한다. `test_test_notification_is_rate_limited_per_user_channel`, `test_test_notification_in_progress_expires_to_unknown`; DND 동작은 위 service 테스트.
+- NTF-011: 미설정 서비스는 liveness를 유지하고, DB/NATS readiness는 각각 확인하며 실제 provider 발송 기능은 disabled로 표시한다. 기존 일정 저장과 알림 장애를 분리한다.
+- REM-003/006/007/012: core 및 batch 내부 인증 preflight로 일정 유효성 및 현재 dispatch attempt/generation을 검사한다. metadata-only 수정은 current core revision과 batch 최신 title을 반영하되 예정시각/channel 변경은 보내지 않는다. MySQL 동시 duplicate claim·delete race 및 NATS publish-failure/redelivery 통합 회귀 테스트가 CI에 있다. 로컬 mock 증거: `test_batch_preflight_checks_dispatch_attempt_and_auth`, `test_core_preflight_includes_current_revision_and_exact_remind_instant`, `test_metadata_only_title_change_uses_latest_batch_title`, `test_changed_reminder_generation_is_not_sent`.
+- OPS001: `notification_attempts_total{outcome}`는 첫 durable attempt completion만 센다. 재발행은 별도 sent 횟수로 잡지 않는다. 프로세스 내 Prometheus 카운터는 재시작/DB commit 직후 crash에 대해 exactly-once를 보장하지 않으며, MySQL attempt ledger가 감사 원본이다. 식별자/목적지 label은 없다.
 
-## 확인
+## 검사 결과
 
 - `python -m pip install -e .` — 성공.
-- `python -m unittest discover -s tests` — 성공, 24 tests. HTTP readiness/internal bearer, tracing, retry-safe channel/consent/preflight flow, deleted-user late due, unsupported channel, quiet-hours midnight wrap, opaque destination 암호화, provider 수락/응답 유실 분류 검증 포함.
-- `python -m compileall -q app tests` — 성공.
-- Telegram 실제 전송은 수행하지 않았다. provider adapter 결과와 서비스 흐름은 fake/mock으로 검사한다.
-- 현재 개발 환경에 MySQL, NATS, Docker가 없어 마이그레이션의 실제 DB 실행, NATS 재연결/ACK crash window, 다중 프로세스 삭제 경합을 통합 검증하지 못했다. 운영 반영 전 MySQL 및 NATS 통합 테스트가 필요하다.
+- `python -m unittest discover -s tests` — 49 tests 중 40 통과, 9개 통합 테스트는 로컬 MySQL/NATS 부재로 skip.
+- `python -m compileall -q app tests` 및 `git diff --check` — 성공.
+- `.github/workflows/test.yml`은 MySQL 8.4 및 NATS JetStream 서비스를 시작하고 `NOTIFY_MYSQL_TEST=1`, `NOTIFY_NATS_TEST=1`로 실제 MySQL transaction/concurrent duplicate/delete race와 NATS result publish-failure/redelivery 테스트를 실행한다. 이 Windows 작업환경에는 Docker가 없어 해당 통합 경로를 여기서 실행하지 못했다.
+- 실제 Telegram provider 또는 실제 수신자에게 전송하지 않았다. provider 경계 테스트는 mock만 사용한다.
 
-## 남은 요구사항 및 선행 조건
+## 운영 선행 조건 및 미완료
 
-- ACC-009~013 / ACN-001~009 계정 이메일 인증 및 복구 메일은 auth 담당 구현·운영 SMTP 설정이 선행한다. 이 서비스에서는 이메일 목적지/메일 발송을 구현하지 않는다.
-- REM-003 core 변경(telegram 채널 저장/검증)은 core 서비스 enum 및 일정 생성 요청 검증이 선행한다. notify 내부 capability URL과 서비스 bearer 계약은 구현했다.
-- NTF 운영 활성화는 운영자가 Telegram bot token/username/webhook secret, 32-byte `NOTIFY_ENCRYPTION_KEY`, MySQL TLS 자격증명, NATS 연결, core/auth 내부 URL 및 `INTERNAL_SERVICE_TOKEN`을 설정하고 webhook 경로를 라우팅해야 한다. 설정 전 사용자 테스트 알림은 `channel_unavailable`로 실패 폐쇄된다.
+- 운영은 `MYSQL_HOST/USER/PASSWORD/DATABASE`, TLS 검증, 32-byte URL-safe base64 `NOTIFY_ENCRYPTION_KEY`, `NATS_URL`, `INTERNAL_SERVICE_TOKEN`, auth/core/batch 내부 URL, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, `TELEGRAM_WEBHOOK_SECRET`, `PUBLIC_APP_URL`, `CORS_ALLOWED_ORIGINS` 설정을 요구한다.
+- `GET /internal/users/{user_id}/channels`는 core가 telegram/verified/consent 여부를 확인하는 내부 API다. core의 telegram 선택지/일정 생성 검증과 배포 내부 URL/token 일치는 core 및 운영 설정 선행이다.
+- 외부 Telegram webhook ingress 설정 및 운영 비밀값 생성/배포는 svc-notify 코드 범위 밖이며 실제 설정 전 provider 발송을 하지 않는다.
+- ACC-009~013 / ACN-001~009 계정 이메일 인증/복구 메일은 auth 담당 구현 및 운영 SMTP 설정 선행이다.

@@ -26,7 +26,8 @@ class NatsWorker:
 
     @property
     def configured(self) -> bool:
-        return bool(self.settings.nats_url and self.store.available and self.settings.internal_service_token)
+        return bool(self.settings.nats_url and self.store.available and self.store.schema_ready
+                    and self.settings.internal_service_token)
 
     def start(self) -> None:
         if self.configured and (self._thread is None or not self._thread.is_alive()):
