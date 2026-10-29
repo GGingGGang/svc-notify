@@ -15,7 +15,7 @@
 
 - `python -m pip install -e .` — 성공.
 - 로컬 `python -m unittest discover -s tests` — 59 tests 중 49 통과, MySQL/NATS 통합 10개는 로컬 서비스 부재로 skip.
-- GitHub Actions [run 40834363398 / job 123314515864](https://github.com/ggingggang/svc-notify/actions/runs/40834363398/job/123314515864) — CI 성공, 59/59 테스트 통과. MySQL 8.4 transaction/concurrency/deletion 통합 및 NATS JetStream publish-failure/redelivery 통합 경로를 포함한다.
+- GitHub Actions [run 40834363398 / job 123315569961](https://github.com/GGingGGang/svc-notify/actions/runs/40834363398/job/123315569961) — CI 로그에서 `Ran 59 tests` 및 `OK` 확인. MySQL 8.4 transaction/concurrency/deletion 통합 및 NATS JetStream publish-failure/redelivery 통합 경로를 포함한다.
 - `python -m compileall -q app tests` 및 `git diff --check` — 성공.
 - 실제 Telegram provider 또는 실제 수신자에게 전송하지 않았다. provider 경계 테스트는 mock만 사용한다.
 
@@ -54,4 +54,4 @@
 
 - legacy `notify_deleted_users` tombstone을 감지하면 `notify_user_state.deleted_at` 마이그레이션을 시도한 쓰기 거부와 별도 commit한다. 이후 호출자가 transaction을 rollback하더라도 삭제 tombstone 변환은 보존되고 계정 데이터 재생성은 차단된다.
 - NATS JetStream 통합 테스트 retention enum을 설치된 nats-py API의 `RetentionPolicy.WORK_QUEUE`로 수정했다. 테스트를 건너뛰지 않고 local CI service에 대해 실제 실행하도록 유지한다.
-- 검증: `python -m unittest discover -s tests` 59개 중 49개 통과, MySQL/NATS 통합 10개는 이 환경에 서비스가 없어 skip; compileall 및 diff check 통과. 실제 통합 경로는 root CI 재실행에서 검증할 예정.
+- 검증: 로컬에서는 59개 중 49개 통과, MySQL/NATS 통합 10개는 서비스 부재로 skip했다. 이후 위 CI 실행에서 통합 테스트를 포함한 59개 전체가 통과했다. compileall 및 diff check도 통과했다.
