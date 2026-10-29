@@ -22,7 +22,7 @@ class JetStreamIntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.result_subject = "app.reminders.result.v1"
         self.result_stream = f"NOTIFY_RESULT_{suffix.upper()}"
         await self.js.add_stream(StreamConfig(name=self.due_stream, subjects=[self.due_subject],
-                                              retention=RetentionPolicy.WorkQueue))
+                                              retention=RetentionPolicy.WORK_QUEUE))
 
     async def asyncTearDown(self):
         for stream in (self.due_stream, self.result_stream):

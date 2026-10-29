@@ -47,3 +47,9 @@
 - Batch internal history 계약은 `GET /internal/users/{userId}/reminders?from&to&limit` + shared bearer, user-scoped query, `{reminders:[...]}` 및 destination/title/raw-error 비노출이다. 이력 조회 실패 또는 잘못된 batch 응답은 `503 history_incomplete`로 반환해 partial/empty 결과로 가장하지 않는다.
 - `tests.test_preflight_clients`는 bearer·bounded query·batch outage를, `tests.test_service`는 30일 default, incomplete failure, dispatch dedupe 및 exhausted retry merge를 검증한다.
 - 검증: 전체 59개 중 49개 통과, MySQL/NATS 통합 10개는 로컬 서비스 부재로 skip; compileall 및 diff check 통과.
+
+## CI 회귀 수정 (2026-10-29)
+
+- legacy `notify_deleted_users` tombstone을 감지하면 `notify_user_state.deleted_at` 마이그레이션을 시도한 쓰기 거부와 별도 commit한다. 이후 호출자가 transaction을 rollback하더라도 삭제 tombstone 변환은 보존되고 계정 데이터 재생성은 차단된다.
+- NATS JetStream 통합 테스트 retention enum을 설치된 nats-py API의 `RetentionPolicy.WORK_QUEUE`로 수정했다. 테스트를 건너뛰지 않고 local CI service에 대해 실제 실행하도록 유지한다.
+- 검증: `python -m unittest discover -s tests` 59개 중 49개 통과, MySQL/NATS 통합 10개는 이 환경에 서비스가 없어 skip; compileall 및 diff check 통과. 실제 통합 경로는 root CI 재실행에서 검증할 예정.

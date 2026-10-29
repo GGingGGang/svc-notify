@@ -114,6 +114,9 @@ class Store:
         cursor.execute("SELECT 1 FROM notify_deleted_users WHERE user_fingerprint=%s", (fingerprint,))
         if cursor.fetchone() is not None:
             cursor.execute("UPDATE notify_user_state SET deleted_at=UTC_TIMESTAMP(3) WHERE user_fingerprint=%s", (fingerprint,))
+            # Persist this forward-only migration even though the caller will
+            # abort its attempted write after learning the account is deleted.
+            cursor.connection.commit()
             return False
         return True
 
