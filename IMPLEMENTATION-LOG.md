@@ -1,25 +1,24 @@
 # 구현 기록
 
-## 변경 사항
+## 구현 범위
 
-- 후속 CI 확인에서 공통 Python 테스트 단계의 의존성 설치 누락을 발견했다. `jenkins-shared-library/resources/ci/services.yaml`에서 `pip install .` 후 테스트하도록 수정했다. 패키지 빌드 산출물은 `.gitignore`에 추가했다.
+- NTF-001~011 / REM-003: Telegram 채널 연결은 일회성 `/start` 챌린지를 실제 Telegram webhook update로 증명한다. 채널 동의, 연결 해제, 조용한 시간대, 30일 발송 이력, 분당 테스트 알림 제한을 구현했다. `push`/`email` 이벤트는 Telegram으로 바꾸지 않고 `skipped/channel_unsupported`로 끝낸다.
+- Telegram 목적지는 AES-GCM 암호문으로 저장한다. 삭제 tombstone은 암호화 키 회전에 영향을 받지 않는 UUID SHA-256 지문이다. 사용자 잠금 행으로 채널/설정/dispatch 쓰기와 계정 삭제를 직렬화하고, 삭제 이후 지연 due는 `cancelled/account_deleted`로 ACK할 수 있으며 개인 데이터 이력을 만들지 않는다.
+- durable NATS 소비자는 reminder 결과를 저장한 뒤 result subject에 발행하고 ACK한다. 같은 dispatch attempt는 기존 상태를 재사용하며, 처리 중 worker가 30초 넘게 중단된 상태는 `unknown`으로 저장해 재전송하지 않는다. 결과에는 제한된 reason code만 포함한다.
+- core 최신 validity 및 auth 계정 활성 상태를 호출해 발송 직전 검사한다. 내부 채널 확인 API `GET /internal/users/{user_id}/channels`는 `INTERNAL_SERVICE_TOKEN` bearer로 보호하고 검증·동의된 채널만 목적지 없이 반환한다.
+- Docker 빌드에서 마이그레이션 파일을 패키지 내 `app/migrations` 경로로 읽는다. MySQL TLS 검증은 기본 필수이며, TLS 해제는 `APP_ENV=test`에서만 허용한다. 설정이 비어 있으면 delivery가 비활성화되지만 liveness는 유지되고 readiness는 DB/NATS를 실제 검사한다.
+- `OPS001`: `notification_attempts_total{outcome}`는 첫 durable attempt completion에만 증가한다(outcome: accepted, retryable_failure, permanent_failure, unknown, skipped, cancelled). result 재발행은 이 카운터에 포함하지 않는다. 카운터는 프로세스 내 Prometheus 값이므로 재시작/DB commit 직후 crash의 경계에서 exactly-once 누적을 보장하지 않으며, 감사 가능한 원본은 MySQL attempt ledger다. 개인정보가 될 수 있는 ID/주소는 label에 사용하지 않는다.
 
-- OpenTelemetry baggage와 trace context propagator를 설치된 패키지의 경로로 가져와 exporter 설정과 관계없이 서비스 모듈이 import되도록 수정했다.
-- trace 테스트가 실제 span 이름 전달 방식(위치 인자)을 확인하도록 고쳤다.
-- tracing 비활성 상태, OTLP 활성 초기화·정상 종료, exporter 초기화 실패, provider 종료 실패를 확인하는 테스트를 추가했다.
-- README에 실행 방법, HTTP 엔드포인트, tracing 설정, 테스트 명령과 발송 비활성 의미를 기록했다.
+## 확인
 
-## 검증
+- `python -m pip install -e .` — 성공.
+- `python -m unittest discover -s tests` — 성공, 24 tests. HTTP readiness/internal bearer, tracing, retry-safe channel/consent/preflight flow, deleted-user late due, unsupported channel, quiet-hours midnight wrap, opaque destination 암호화, provider 수락/응답 유실 분류 검증 포함.
+- `python -m compileall -q app tests` — 성공.
+- Telegram 실제 전송은 수행하지 않았다. provider adapter 결과와 서비스 흐름은 fake/mock으로 검사한다.
+- 현재 개발 환경에 MySQL, NATS, Docker가 없어 마이그레이션의 실제 DB 실행, NATS 재연결/ACK crash window, 다중 프로세스 삭제 경합을 통합 검증하지 못했다. 운영 반영 전 MySQL 및 NATS 통합 테스트가 필요하다.
 
-- 명령: `python -m unittest discover -s tests` (svc-notify 디렉터리)
-- 결과: 15 tests, 성공. 초기화 및 종료 실패 테스트에서 예상된 경고 로그가 출력됐다.
+## 남은 요구사항 및 선행 조건
 
-## 남은 요구사항과 선행 조건
-
-- **ACC-009~013, ACN-001~009 (P1 계정 확인·복구 메일):** 계정 수명주기, 일회용 확인/재설정 링크, 만료·재사용 방지, 요청 제한과 auth↔notify 인터페이스를 먼저 확정해야 한다. 실제 메일 운송이 준비되지 않은 상태에서 공개 가입을 열면 안 된다.
-- **NTF-001~011 (P2 일정 알림):** 서비스 간 durable handoff, 확인된 수신 목적지와 동의, 발송 직전 최신 일정/채널 상태, 제공자 접수·불확실 응답·영구 실패 처리, 이력/재시도 계약이 선행돼야 한다. batch·web 연계와 제공자 선택도 필요하다.
-- **REM-012 및 AC-016~017:** batch 중복 인계와 외부 접수 후 응답 유실을 안전하게 처리하는 계약과 통합 검증이 필요하다. 실제 발송이 꺼진 상태에서는 성공 이력·통계를 만들지 않는다.
-
-## 운송 제안
-
-계약 확정 뒤에는 표준 라이브러리 `smtplib`의 검증된 TLS SMTP 연결과 제한시간을 사용하는 얇은 어댑터로 시작할 수 있다. 자격 증명은 설정/비밀 저장소에서만 받고 로그에 주소·본문·자격 증명을 남기지 않는다. P1 계정 메일과 P2 일정 알림은 목적과 계약이 다르므로 각각 별도 요청 흐름으로 연결한다. 현재 구현에는 전송 어댑터나 외부 호출이 없다.
+- ACC-009~013 / ACN-001~009 계정 이메일 인증 및 복구 메일은 auth 담당 구현·운영 SMTP 설정이 선행한다. 이 서비스에서는 이메일 목적지/메일 발송을 구현하지 않는다.
+- REM-003 core 변경(telegram 채널 저장/검증)은 core 서비스 enum 및 일정 생성 요청 검증이 선행한다. notify 내부 capability URL과 서비스 bearer 계약은 구현했다.
+- NTF 운영 활성화는 운영자가 Telegram bot token/username/webhook secret, 32-byte `NOTIFY_ENCRYPTION_KEY`, MySQL TLS 자격증명, NATS 연결, core/auth 내부 URL 및 `INTERNAL_SERVICE_TOKEN`을 설정하고 webhook 경로를 라우팅해야 한다. 설정 전 사용자 테스트 알림은 `channel_unavailable`로 실패 폐쇄된다.

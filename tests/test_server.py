@@ -28,6 +28,19 @@ class ServerTest(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertEqual(json.loads(response.read()), {"status": "ok"})
 
+    def test_internal_channel_capability_requires_service_bearer(self) -> None:
+        self.server.settings = Settings(http_host="127.0.0.1", http_port=0, internal_service_token="secret")
+        self.server.notify.internal_channels = lambda user_id: {"user_id": user_id, "channels": []}
+        request = Request(f"{self.base_url}/internal/users/user-123/channels",
+                          headers={"Authorization": "Bearer secret"})
+        with urlopen(request, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(json.loads(response.read()), {"user_id": "user-123", "channels": []})
+
+        with self.assertRaises(Exception) as raised:
+            urlopen(f"{self.base_url}/internal/users/user-123/channels", timeout=5)
+        self.assertEqual(raised.exception.code, 401)
+
     def test_healthz_continues_incoming_trace_context(self) -> None:
         with patch("app.server.trace.get_tracer") as get_tracer, patch(
             "app.server.propagate.extract", wraps=__import__("opentelemetry").propagate.extract
@@ -47,9 +60,15 @@ class ServerTest(unittest.TestCase):
     def test_readyz(self) -> None:
         self.metrics.mark_ready(True)
 
-        with urlopen(f"{self.base_url}/readyz", timeout=5) as response:
-            self.assertEqual(response.status, 200)
-            self.assertEqual(json.loads(response.read()), {"status": "ready", "delivery": "disabled"})
+        try:
+            urlopen(f"{self.base_url}/readyz", timeout=5)
+        except Exception as exc:
+            self.assertEqual(exc.code, 503)
+            body = json.loads(exc.read())
+        else:
+            self.fail("readiness must fail when database and NATS are unavailable")
+        self.assertEqual(body, {"status": "not_ready", "database": "unavailable",
+                                "events": "unavailable", "delivery": "disabled"})
 
     def test_metrics(self) -> None:
         self.metrics.mark_ready(True)
@@ -61,6 +80,7 @@ class ServerTest(unittest.TestCase):
         self.assertIn("text/plain", response.headers["Content-Type"])
         self.assertIn('app_ready{service="svc-notify"} 1', body)
         self.assertIn('notification_delivery_enabled{service="svc-notify"} 0', body)
+        self.assertIn('notification_attempts_total{service="svc-notify",outcome="accepted"} 0', body)
         self.assertNotIn("reminders_sent_total", body)
         self.assertIn("app_uptime_seconds", body)
 

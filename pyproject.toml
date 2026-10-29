@@ -7,4 +7,13 @@ dependencies = [
     "opentelemetry-api>=1.27,<2",
     "opentelemetry-sdk>=1.27,<2",
     "opentelemetry-exporter-otlp-proto-grpc>=1.27,<2",
+    "PyJWT[crypto]>=2.10,<3",
+    "PyMySQL>=1.1,<2",
+    "nats-py>=2.9,<3",
 ]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["migrations/*.sql"]
