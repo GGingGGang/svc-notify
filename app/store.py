@@ -300,16 +300,18 @@ class Store:
             )
             conn.commit()
 
-    def history(self, user_id: str, from_at: datetime, to_at: datetime) -> list[dict[str, Any]]:
+    def history(self, user_id: str, from_at: datetime, to_at: datetime, limit: int = 100) -> list[dict[str, Any]]:
         with self.connect() as conn, conn.cursor() as cursor:
             cursor.execute(
-                "SELECT id,channel,status,reason_code,attempt_count,scheduled_at,created_at,is_test "
-                "FROM notification_history h WHERE h.user_id=%s AND h.created_at >= %s AND h.created_at < %s "
-                "AND h.created_at >= UTC_TIMESTAMP(3)-INTERVAL 30 DAY ORDER BY h.created_at DESC LIMIT 500",
-                (user_id, _utc_naive(from_at), _utc_naive(to_at)),
+                "SELECT id,dispatch_id,channel,status,reason_code,attempt_count,scheduled_at,created_at,is_test "
+                "FROM notification_history h WHERE h.user_id=%s AND COALESCE(h.scheduled_at,h.created_at) >= %s "
+                "AND COALESCE(h.scheduled_at,h.created_at) < %s "
+                "AND COALESCE(h.scheduled_at,h.created_at) >= UTC_TIMESTAMP(3)-INTERVAL 30 DAY "
+                "ORDER BY COALESCE(h.scheduled_at,h.created_at) DESC LIMIT %s",
+                (user_id, _utc_naive(from_at), _utc_naive(to_at), min(max(int(limit), 1), 100)),
             )
             rows = cursor.fetchall()
-        return [{"id": row["id"], "channel": row["channel"], "status": row["status"],
+        return [{"id": row["id"], "dispatch_id": row["dispatch_id"], "channel": row["channel"], "status": row["status"],
                  "reason_code": row["reason_code"], "attempt_count": row["attempt_count"],
                  "scheduled_at": _iso(row["scheduled_at"]), "created_at": _iso(row["created_at"]),
                  "is_test": bool(row["is_test"])} for row in rows]

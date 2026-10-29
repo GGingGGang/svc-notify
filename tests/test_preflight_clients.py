@@ -68,6 +68,22 @@ class PreflightClientTest(unittest.TestCase):
         with self.assertRaises(BatchUnavailable):
             BatchClient(self.settings).reminder_validity(self.event)
 
+    @patch("app.batch.urllib.request.urlopen")
+    def test_batch_history_uses_user_scope_bounded_query_and_internal_auth(self, urlopen):
+        urlopen.return_value = Response({"reminders": []})
+        rows = BatchClient(self.settings).reminder_history("user/one", "2026-10-01T00:00:00Z",
+                                                           "2026-10-29T00:00:00Z", 100)
+        request = urlopen.call_args.args[0]
+        self.assertEqual(rows, [])
+        self.assertIn("/internal/users/user%2Fone/reminders?", request.full_url)
+        self.assertIn("limit=100", request.full_url)
+        self.assertEqual(request.get_header("Authorization"), "Bearer service-secret")
+
+    @patch("app.batch.urllib.request.urlopen", side_effect=HTTPError("http://batch.test", 503, "unavailable", {}, None))
+    def test_batch_history_failure_is_not_empty_success(self, _urlopen):
+        with self.assertRaises(BatchUnavailable):
+            BatchClient(self.settings).reminder_history("u", "2026-10-01T00:00:00Z", "2026-10-29T00:00:00Z")
+
     @patch("app.core.urllib.request.urlopen")
     def test_core_preflight_includes_current_revision_and_exact_remind_instant(self, urlopen):
         urlopen.return_value = Response({"valid": True, "title": "Current title"})

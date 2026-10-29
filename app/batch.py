@@ -43,6 +43,27 @@ class BatchClient:
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
             raise BatchUnavailable("batch_unavailable") from exc
 
+    def reminder_history(self, user_id: str, from_at: str, to_at: str, limit: int = 100) -> list[dict[str, Any]]:
+        if not self.settings.internal_service_token:
+            raise BatchUnavailable("batch_unavailable")
+        user = urllib.parse.quote(str(user_id), safe="")
+        query = urllib.parse.urlencode({"from": from_at, "to": to_at, "limit": limit})
+        url = f"{self.settings.batch_url.rstrip('/')}/internal/users/{user}/reminders?{query}"
+        request = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {self.settings.internal_service_token}",
+            "Accept": "application/json",
+        })
+        try:
+            with urllib.request.urlopen(request, timeout=2) as response:
+                body = json.loads(response.read(65536))
+                if response.status != 200 or not isinstance(body, dict) or not isinstance(body.get("reminders"), list):
+                    raise BatchUnavailable("batch_unavailable")
+                return body["reminders"]
+        except urllib.error.HTTPError as exc:
+            raise BatchUnavailable("batch_unavailable") from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
+            raise BatchUnavailable("batch_unavailable") from exc
+
 
 def _matches_due(snapshot: dict[str, Any], event: dict[str, Any]) -> bool:
     matches = (

@@ -40,3 +40,10 @@
 - NATS worker는 두 durable subscription 생성 뒤에만 events readiness를 표시한다. 연결/구독/consumer 예외 시 TaskGroup이 sibling consumer를 취소하고, finally에서 readiness를 내린 뒤 연결을 닫고 재시도한다. shutdown 중 재시도 대기는 종료 event로 즉시 깨운다.
 - `tests.test_nats_lifecycle`: schema retry 성공·shutdown, NATS 연결 재시도·ready 상태 해제, 두 번째 subscription 실패 시 연결 정리를 검증한다.
 - 검증: lifecycle 테스트 4개 통과; 전체 55개 중 45개 통과, MySQL/NATS 통합 10개는 로컬 서비스 미구동으로 skip; compileall 및 diff check 통과.
+
+## NTF-008 이력 통합 (2026-10-29)
+
+- `GET /notifications`는 최대 30일·100행 범위에서 batch 사용자 전용 reminder ledger와 notify provider/test 이력을 `dispatch_id`로 합친다. Batch의 scheduling/pending 및 재시도 소진 상태와 notify의 provider 완료 상태를 보존하며 예약시각 기준 최신순으로 반환한다.
+- Batch internal history 계약은 `GET /internal/users/{userId}/reminders?from&to&limit` + shared bearer, user-scoped query, `{reminders:[...]}` 및 destination/title/raw-error 비노출이다. 이력 조회 실패 또는 잘못된 batch 응답은 `503 history_incomplete`로 반환해 partial/empty 결과로 가장하지 않는다.
+- `tests.test_preflight_clients`는 bearer·bounded query·batch outage를, `tests.test_service`는 30일 default, incomplete failure, dispatch dedupe 및 exhausted retry merge를 검증한다.
+- 검증: 전체 59개 중 49개 통과, MySQL/NATS 통합 10개는 로컬 서비스 부재로 skip; compileall 및 diff check 통과.

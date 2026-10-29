@@ -121,11 +121,21 @@ class NotifyService:
         try:
             from_at = _query_date(query, "from", now - timedelta(days=30))
             to_at = _query_date(query, "to", now)
+            limit = int(query.get("limit", ["100"])[0])
         except ValueError as exc:
             raise ServiceError(400, "invalid_date_range") from exc
-        if from_at >= to_at or to_at - from_at > timedelta(days=30) or to_at > now + timedelta(minutes=1):
+        if from_at >= to_at or to_at - from_at > timedelta(days=30) or to_at > now + timedelta(minutes=1) or not 1 <= limit <= 100:
             raise ServiceError(400, "invalid_date_range")
-        return {"notifications": self._store().history(user_id, from_at, to_at)}
+        try:
+            local = self._store().history(user_id, from_at, to_at, limit)
+            remote = self.batch.reminder_history(user_id, _wire_date(from_at), _wire_date(to_at), limit)
+        except BatchUnavailable as exc:
+            raise ServiceError(503, "history_incomplete") from exc
+        try:
+            notifications = _merge_histories(local, remote, limit)
+        except (TypeError, ValueError, KeyError) as exc:
+            raise ServiceError(503, "history_incomplete") from exc
+        return {"notifications": notifications}
 
     def request_test(self, user_id: str, channel_id: str, idempotency_key: str) -> dict[str, Any]:
         if not self.telegram_available:
@@ -311,6 +321,79 @@ def _parse_date(value: Any) -> datetime:
     if result.tzinfo is None:
         raise ValueError("timezone required")
     return result.astimezone(timezone.utc)
+
+
+def _wire_date(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _merge_histories(local: list[dict[str, Any]], remote: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    valid_batch_statuses = {"pending", "dispatching", "sent", "failed", "unknown", "skipped"}
+    by_dispatch: dict[str, dict[str, Any]] = {}
+    for item in remote:
+        if not isinstance(item, dict):
+            raise ValueError("invalid batch history row")
+        dispatch_id = item.get("dispatch_id")
+        channel = item.get("channel")
+        status = item.get("status")
+        scheduled_at = item.get("scheduled_at")
+        if (not isinstance(dispatch_id, str) or not dispatch_id or not isinstance(channel, str)
+                or not isinstance(status, str) or status not in valid_batch_statuses):
+            raise ValueError("invalid batch history fields")
+        scheduled = _wire_date(_parse_date(scheduled_at))
+        created_at = item.get("created_at")
+        if created_at is not None:
+            created_at = _wire_date(_parse_date(created_at))
+        reason = item.get("reason_code")
+        if not isinstance(reason, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", reason):
+            reason = None
+        attempt_count = item.get("attempt_count", 0)
+        if not isinstance(attempt_count, int) or isinstance(attempt_count, bool) or attempt_count < 0:
+            raise ValueError("invalid batch history attempt")
+        by_dispatch[dispatch_id] = {
+            "id": dispatch_id, "dispatch_id": dispatch_id, "channel": channel,
+            "status": "pending" if status == "dispatching" else status,
+            "reason_code": reason, "attempt_count": attempt_count,
+            "scheduled_at": scheduled, "created_at": created_at, "is_test": False,
+        }
+
+    for item in local:
+        if not isinstance(item, dict):
+            raise ValueError("invalid notify history row")
+        dispatch_id = item.get("dispatch_id")
+        if not isinstance(dispatch_id, str) or not dispatch_id:
+            continue
+        batch_row = by_dispatch.get(dispatch_id)
+        if batch_row is None:
+            by_dispatch[dispatch_id] = dict(item)
+            continue
+        local_status = item.get("status")
+        batch_status = batch_row["status"]
+        # The provider confirms acceptance directly; batch owns retry exhaustion
+        # and the final failed state after its retry budget is spent.
+        if local_status == "sent":
+            merged_status = "sent"
+        elif batch_status == "failed":
+            merged_status = "failed"
+        elif batch_status in {"unknown", "skipped", "sent"}:
+            merged_status = batch_status
+        elif local_status in {"unknown", "skipped", "cancelled"}:
+            merged_status = local_status
+        elif local_status == "failed":
+            merged_status = "pending"
+        else:
+            merged_status = batch_status
+        batch_row.update({"status": merged_status,
+                          "reason_code": batch_row.get("reason_code") or item.get("reason_code"),
+                          "attempt_count": max(batch_row["attempt_count"], item.get("attempt_count", 0)),
+                          "created_at": item.get("created_at") or batch_row.get("created_at"),
+                          "is_test": bool(item.get("is_test", False))})
+        if item.get("id"):
+            batch_row["id"] = item["id"]
+
+    rows = list(by_dispatch.values())
+    rows.sort(key=lambda item: _parse_date(item.get("scheduled_at") or item.get("created_at")), reverse=True)
+    return rows[:limit]
 
 
 def _query_date(query: dict[str, list[str]], key: str, default: datetime) -> datetime:

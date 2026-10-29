@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
 
 from app.config import Settings
-from app.service import NotifyService, _in_quiet_hours
+from app.batch import BatchUnavailable
+from app.service import NotifyService, ServiceError, _in_quiet_hours, _merge_histories
 from app.telegram import DeliveryResult
 from app.store import Store
 
@@ -37,7 +38,7 @@ class FakeStore:
         self.saved.append(result)
         return result
 
-    def history(self, _user, from_at, to_at):
+    def history(self, _user, from_at, to_at, _limit=100):
         self.history_range = (from_at, to_at)
         return []
 
@@ -56,6 +57,7 @@ class NotifyServiceTest(unittest.TestCase):
         self.core = Mock()
         self.core.reminder_validity.return_value = {"valid": True}
         self.batch = Mock()
+        self.batch.reminder_history.return_value = []
         self.telegram = Mock()
         self.telegram.configured = True
         self.telegram.send_reminder.return_value = DeliveryResult("accepted", None, "receipt")
@@ -110,6 +112,30 @@ class NotifyServiceTest(unittest.TestCase):
         self.assertEqual(response, {"notifications": []})
         start, end = self.store.history_range
         self.assertEqual(end - start, timedelta(days=30))
+        self.batch.reminder_history.assert_called_once()
+
+    def test_history_is_explicitly_incomplete_when_batch_unavailable(self):
+        self.batch.reminder_history.side_effect = BatchUnavailable("batch_unavailable")
+        with self.assertRaises(ServiceError) as caught:
+            self.service.history("user", {})
+        self.assertEqual((caught.exception.status, caught.exception.code), (503, "history_incomplete"))
+
+    def test_history_merge_deduplicates_dispatch_and_uses_batch_exhaustion(self):
+        scheduled = "2026-10-29T09:50:00Z"
+        local = [{"id": "local-row", "dispatch_id": "dispatch", "channel": "telegram", "status": "failed",
+                  "reason_code": "provider_busy", "attempt_count": 2, "scheduled_at": scheduled,
+                  "created_at": "2026-10-29T09:52:00Z", "is_test": False}]
+        batch = [{"dispatch_id": "dispatch", "channel": "telegram", "status": "failed",
+                  "reason_code": "retry_exhausted", "attempt_count": 3, "scheduled_at": scheduled,
+                  "created_at": "2026-10-29T09:50:00Z"},
+                 {"dispatch_id": "pending", "channel": "telegram", "status": "dispatching",
+                  "reason_code": None, "attempt_count": 0, "scheduled_at": "2026-10-29T10:00:00Z"}]
+        merged = _merge_histories(local, batch, 100)
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[0]["status"], "pending")
+        self.assertEqual(merged[1]["status"], "failed")
+        self.assertEqual(merged[1]["id"], "local-row")
+        self.assertEqual(merged[1]["reason_code"], "retry_exhausted")
 
     def test_metadata_only_title_change_uses_latest_batch_title(self):
         first = dict(self.snapshot)
