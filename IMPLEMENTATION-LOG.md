@@ -25,3 +25,11 @@
 - `GET /internal/users/{user_id}/channels`는 core가 telegram/verified/consent 여부를 확인하는 내부 API다. core의 telegram 선택지/일정 생성 검증과 배포 내부 URL/token 일치는 core 및 운영 설정 선행이다.
 - 외부 Telegram webhook ingress 설정 및 운영 비밀값 생성/배포는 svc-notify 코드 범위 밖이며 실제 설정 전 provider 발송을 하지 않는다.
 - ACC-009~013 / ACN-001~009 계정 이메일 인증/복구 메일은 auth 담당 구현 및 운영 SMTP 설정 선행이다.
+
+## 후속 계약 대조 (2026-10-29)
+
+- Core validity 계약 확인: notify는 공유 Bearer로 user_id/revision/minutes_before/channel/remind_at을 전달하며, 유효 응답의 최신 title을 실제 메시지에 사용한다. Core는 메타데이터 revision 변경은 허용하되 reminder 시각/채널/offset 변경 및 비활성 계정을 거부한다.
+- Batch validity 계약 확인: dispatch_id 경로와 attempt query를 사용한다. batch 서버가 현재 generation/attempt를 확인하며, notify도 응답의 사용자·일정·채널·offset과 `remind_at`을 이벤트와 비교한다. `remind_at` 불일치는 fail-closed 처리하도록 보강하고 회귀 테스트를 추가했다. 직전 batch 재검증으로 stale generation을 차단하고 metadata-only 최신 title은 core 응답에서 가져온다.
+- 계정 삭제 계약 확인: 요청의 `event_id/request_id/user_id`와 완료 ACK의 `service=notify/status=completed`가 auth 계약과 일치한다. notify는 사용자 데이터와 encrypted targets를 transaction에서 지우고 안정적 SHA-256 tombstone을 남긴 뒤 ACK를 publish하고 입력 메시지를 ACK한다. DB commit 뒤 publish 실패 시 NATS redelivery의 중복 삭제 경로가 완료 ACK를 다시 publish한다.
+- CI workflow 확인: MySQL/NATS는 workflow가 띄운 localhost 서비스이며, NATS 검증은 테스트 subject/stream만 사용한다. Telegram credentials를 설정하지 않고 provider adapter는 fake/mock 경로만 테스트하므로 수신자에게 실제 전송하지 않는다. 현재 Windows 환경에는 Docker가 없어 CI 통합 경로는 현지 실행하지 못했다.
+- 검증: `python -m unittest tests.test_preflight_clients` 6 tests 통과; `python -m unittest discover -s tests` 51 tests 중 41 통과, MySQL/NATS 통합 10 skip; compileall 및 git diff --check 통과.

@@ -61,7 +61,11 @@ def _matches_due(snapshot: dict[str, Any], event: dict[str, Any]) -> bool:
         return False
     try:
         _instant(snapshot["start_at"])
-        _instant(snapshot["remind_at"])
+        # The batch endpoint proves this dispatch generation and attempt are
+        # current. Also bind its canonical reminder instant to the delivered
+        # event so a stale/misrouted envelope cannot pass on shape alone.
+        if _instant(snapshot["remind_at"]) != _instant(event["remind_at"]):
+            return False
     except ValueError:
         return False
     return True

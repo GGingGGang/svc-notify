@@ -54,6 +54,15 @@ class PreflightClientTest(unittest.TestCase):
         with self.assertRaises(BatchUnavailable):
             BatchClient(self.settings).reminder_validity(self.event)
 
+    @patch("app.batch.urllib.request.urlopen")
+    def test_batch_mismatched_reminder_instant_fails_closed(self, urlopen):
+        urlopen.return_value = Response({"valid": True, "user_id": "u-1", "schedule_id": "s-1",
+                                         "revision": 4, "start_at": self.event["start_at"],
+                                         "remind_at": "2026-10-29T09:51:00Z", "minutes_before": 10,
+                                         "channel": "telegram", "title": "Reminder"})
+        with self.assertRaises(BatchUnavailable):
+            BatchClient(self.settings).reminder_validity(self.event)
+
     @patch("app.batch.urllib.request.urlopen", side_effect=HTTPError("http://batch.test", 401, "unauthorized", {}, None))
     def test_batch_internal_auth_error_is_retryable_unavailable(self, _urlopen):
         with self.assertRaises(BatchUnavailable):
