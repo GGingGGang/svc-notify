@@ -37,6 +37,20 @@ class MySQLStoreIntegrationTest(unittest.TestCase):
         self.store.ensure_schema()
         self.assertTrue(self.store.ping())
 
+    def test_legacy_tombstone_blocks_resurrection_and_migrates_to_user_lock(self):
+        user_id = str(uuid.uuid4())
+        fingerprint = self.store._opaque_id(user_id)
+        with self.store.connect() as conn, conn.cursor() as cursor:
+            cursor.execute("INSERT INTO notify_deleted_users(user_fingerprint) VALUES(%s)", (fingerprint,))
+            conn.commit()
+        self.assertTrue(self.store.is_deleted_user(user_id))
+        with self.assertRaisesRegex(ValueError, "account_deleted"):
+            self.store.connect_telegram(user_id, hashlib.sha256(uuid.uuid4().bytes).digest(),
+                                        datetime.now(timezone.utc) + timedelta(minutes=15))
+        with self.store.connect() as conn, conn.cursor() as cursor:
+            cursor.execute("SELECT deleted_at FROM notify_user_state WHERE user_fingerprint=%s", (fingerprint,))
+            self.assertIsNotNone(cursor.fetchone()["deleted_at"])
+
     def test_channel_ownership_and_telegram_challenge_are_one_time(self):
         user_id = str(uuid.uuid4())
         other_user = str(uuid.uuid4())

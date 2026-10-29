@@ -98,14 +98,24 @@ class Store:
         with self.connect() as conn, conn.cursor() as cursor:
             cursor.execute("SELECT deleted_at FROM notify_user_state WHERE user_fingerprint=%s", (fingerprint,))
             row = cursor.fetchone()
-            return row is not None and row["deleted_at"] is not None
+            if row is not None and row["deleted_at"] is not None:
+                return True
+            cursor.execute("SELECT 1 FROM notify_deleted_users WHERE user_fingerprint=%s", (fingerprint,))
+            return cursor.fetchone() is not None
 
     def _lock_user(self, cursor, user_id: str) -> bool:
         """Lock persistent opaque user state so delete and delayed writes serialize."""
         fingerprint = self._opaque_id(user_id)
         cursor.execute("INSERT IGNORE INTO notify_user_state(user_fingerprint) VALUES(%s)", (fingerprint,))
         cursor.execute("SELECT deleted_at FROM notify_user_state WHERE user_fingerprint=%s FOR UPDATE", (fingerprint,))
-        return cursor.fetchone()["deleted_at"] is None
+        row = cursor.fetchone()
+        if row["deleted_at"] is not None:
+            return False
+        cursor.execute("SELECT 1 FROM notify_deleted_users WHERE user_fingerprint=%s", (fingerprint,))
+        if cursor.fetchone() is not None:
+            cursor.execute("UPDATE notify_user_state SET deleted_at=UTC_TIMESTAMP(3) WHERE user_fingerprint=%s", (fingerprint,))
+            return False
+        return True
 
     def connect_telegram(self, user_id: str, token_hash: bytes, expires_at: datetime) -> str:
         channel_id = str(uuid.uuid4())
