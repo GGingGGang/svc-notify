@@ -33,3 +33,10 @@
 - 계정 삭제 계약 확인: 요청의 `event_id/request_id/user_id`와 완료 ACK의 `service=notify/status=completed`가 auth 계약과 일치한다. notify는 사용자 데이터와 encrypted targets를 transaction에서 지우고 안정적 SHA-256 tombstone을 남긴 뒤 ACK를 publish하고 입력 메시지를 ACK한다. DB commit 뒤 publish 실패 시 NATS redelivery의 중복 삭제 경로가 완료 ACK를 다시 publish한다.
 - CI workflow 확인: MySQL/NATS는 workflow가 띄운 localhost 서비스이며, NATS 검증은 테스트 subject/stream만 사용한다. Telegram credentials를 설정하지 않고 provider adapter는 fake/mock 경로만 테스트하므로 수신자에게 실제 전송하지 않는다. 현재 Windows 환경에는 Docker가 없어 CI 통합 경로는 현지 실행하지 못했다.
 - 검증: `python -m unittest tests.test_preflight_clients` 6 tests 통과; `python -m unittest discover -s tests` 51 tests 중 41 통과, MySQL/NATS 통합 10 skip; compileall 및 git diff --check 통과.
+
+## 서비스 수명주기 후속 수정 (2026-10-29)
+
+- MySQL 초기 schema migration이 일시 실패해도 shutdown event까지 재시도하는 setup thread를 추가했다. 설정된 Store는 유지되며 NATS worker는 schema readiness가 올라올 때까지 연결을 시도하지 않고 기다린다.
+- NATS worker는 두 durable subscription 생성 뒤에만 events readiness를 표시한다. 연결/구독/consumer 예외 시 TaskGroup이 sibling consumer를 취소하고, finally에서 readiness를 내린 뒤 연결을 닫고 재시도한다. shutdown 중 재시도 대기는 종료 event로 즉시 깨운다.
+- `tests.test_nats_lifecycle`: schema retry 성공·shutdown, NATS 연결 재시도·ready 상태 해제, 두 번째 subscription 실패 시 연결 정리를 검증한다.
+- 검증: lifecycle 테스트 4개 통과; 전체 55개 중 45개 통과, MySQL/NATS 통합 10개는 로컬 서비스 미구동으로 skip; compileall 및 diff check 통과.

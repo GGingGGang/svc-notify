@@ -26,8 +26,7 @@ class NatsWorker:
 
     @property
     def configured(self) -> bool:
-        return bool(self.settings.nats_url and self.store.available and self.store.schema_ready
-                    and self.settings.internal_service_token)
+        return bool(self.settings.nats_url and self.store.available and self.settings.internal_service_token)
 
     def start(self) -> None:
         if self.configured and (self._thread is None or not self._thread.is_alive()):
@@ -42,18 +41,34 @@ class NatsWorker:
 
     async def _run(self) -> None:
         while not self._stop.is_set():
+            if not self.store.schema_ready:
+                await self._wait_before_retry()
+                continue
+            connection = None
             try:
                 connection = await nats.connect(self.settings.nats_url, connect_timeout=2, max_reconnect_attempts=-1)
-                self.connected = True
                 js = connection.jetstream()
                 due = await js.pull_subscribe("app.reminders.due.v1", durable="notify-reminder-dispatch", stream="APP_REMINDERS")
                 cleanup = await js.pull_subscribe("app.account.deletion_requested.v1", durable="notify-account-cleanup", stream="ACCOUNT_LIFECYCLE")
-                await asyncio.gather(self._consume_due(due, js), self._consume_cleanup(cleanup, js), self._monitor_connection(connection))
-                await connection.close()
+                self.connected = True
+                async with asyncio.TaskGroup() as group:
+                    group.create_task(self._consume_due(due, js))
+                    group.create_task(self._consume_cleanup(cleanup, js))
+                    group.create_task(self._monitor_connection(connection))
             except Exception as exc:
-                self.connected = False
                 logger.warning("notification event connection unavailable (%s)", type(exc).__name__)
-                await asyncio.sleep(2)
+            finally:
+                self.connected = False
+                if connection is not None:
+                    try:
+                        await connection.close()
+                    except Exception:
+                        logger.warning("notification event connection close failed")
+            if not self._stop.is_set():
+                await self._wait_before_retry()
+
+    async def _wait_before_retry(self) -> None:
+        await asyncio.to_thread(self._stop.wait, 2)
 
     async def _monitor_connection(self, connection) -> None:
         while not self._stop.is_set() and connection.is_connected:

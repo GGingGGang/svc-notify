@@ -47,12 +47,19 @@ def run_service(settings: Settings, shutdown_requested: threading.Event) -> None
     tracer_provider = configure_tracing(settings.service_name, settings.app_version)
     metrics = Metrics()
     store = None
+    schema_retry_thread = None
     if settings.mysql_host and settings.mysql_user and settings.mysql_password and settings.encryption_key:
         try:
             store = Store(settings)
             store.ensure_schema()
         except Exception as exc:
             logging.warning("notification storage unavailable (%s)", type(exc).__name__)
+            if store is not None:
+                schema_retry_thread = threading.Thread(
+                    target=_retry_schema, args=(shutdown_requested, store),
+                    name="notify-schema-retry", daemon=True,
+                )
+                schema_retry_thread.start()
     service = NotifyService(settings, store=store)
     service.metrics = metrics
     worker = NatsWorker(settings, service, store) if store else None
@@ -74,6 +81,8 @@ def run_service(settings: Settings, shutdown_requested: threading.Event) -> None
         metrics.mark_ready(False)
         if worker:
             worker.stop()
+        if schema_retry_thread:
+            schema_retry_thread.join(timeout=5)
         cleanup_thread.join(timeout=2)
         server.shutdown()
         server_thread.join(timeout=15)
@@ -89,6 +98,15 @@ def _run_retention(shutdown_requested: threading.Event, store: Store | None) -> 
             store.cleanup()
         except Exception as exc:
             logging.warning("notification retention cleanup failed (%s)", type(exc).__name__)
+
+
+def _retry_schema(shutdown_requested: threading.Event, store: Store, retry_seconds: float = 2) -> None:
+    while not shutdown_requested.is_set() and not store.schema_ready:
+        try:
+            store.ensure_schema()
+        except Exception as exc:
+            logging.warning("notification schema setup retry failed (%s)", type(exc).__name__)
+            shutdown_requested.wait(retry_seconds)
 
 
 
